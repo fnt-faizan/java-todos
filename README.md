@@ -3,6 +3,6 @@
 <h3>To execute run</h3><br>
 
 ```
-mvn exeec:java -Dexec.mainClass="com.fntfaizan.TodoServer"
+mvn exec:java -Dexec.mainClass="com.fntfaizan.TodoServer"
 
 ```
