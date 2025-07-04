@@ -5,10 +5,11 @@ import java.io.*;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
+import java.util.concurrent.*;
 
 public class TodoServer {
-    static List<Todo> todos = new ArrayList<>();
-    static int counter = 1;
+    static Map<String, Todo> todos = new ConcurrentHashMap<>(); // thread-safe map to store todos
+    // ConcurrentHashMap allows multiple threads to read and write without blocking each other 
     static Gson gson = new Gson();
 
     public static void main(String[] args) throws IOException {
@@ -21,7 +22,7 @@ public class TodoServer {
             if ("GET".equalsIgnoreCase(method)) { //check if the request method is GET
                 // Return all todos that are not deleted
                 List<Todo> visible = new ArrayList<>();
-                for (Todo t : todos)
+                for (Todo t : todos.values())
                     if (!t.deleted) visible.add(t);
                 sendJson(exchange, 200, gson.toJson(visible)); //implemented below
 
@@ -36,16 +37,15 @@ public class TodoServer {
                     exchange.sendResponseHeaders(400, -1); // Bad Request
                     return;
                 }
-                t.id = counter++;
+                t.id = UUID.randomUUID().toString();
                 t.deleted = false;
-                todos.add(t);
+                todos.put(t.id, t);
                 sendJson(exchange, 201, gson.toJson(t)); //201 Created
 
             } else {
                 exchange.sendResponseHeaders(405, -1); // Method Not Allowed
             }
         });
-
 
         /* 
          * This part handles requests to /todos/{id}
@@ -63,24 +63,14 @@ public class TodoServer {
                  exchange.sendResponseHeaders(404, -1); return;
                 } 
 
-            int id;
-            try { 
-                id = Integer.parseInt(parts[2]);
-             }
-            catch (NumberFormatException e) { 
-                exchange.sendResponseHeaders(400, -1); 
-                return; 
-            } 
+            String id = parts[2];
 
             // Find the todo with the given id
             // and check if it is not deleted
             // If not found, return 404 Not Found
             // If found, handle the request based on the method
-            Todo todo = null;
-            for (Todo t : todos)
-                if (t.id == id && !t.deleted) { todo = t;}
-            if (todo == null) { exchange.sendResponseHeaders(404, -1); return; }
-
+            Todo todo = todos.get(id);
+            if (todo == null || todo.deleted) { exchange.sendResponseHeaders(404, -1); return; }
 
             //PUT -> update the todo
             if ("PUT".equalsIgnoreCase(method)) {
@@ -93,6 +83,7 @@ public class TodoServer {
                 }
                 todo.title = upd.title;
                 todo.status = upd.status;
+                todos.put(todo.id, todo);
                 sendJson(exchange, 200, gson.toJson(todo));
             }  
             //GET -> return the todo
@@ -103,15 +94,16 @@ public class TodoServer {
             //DELETE -> soft-delete the todo
             else if ("DELETE".equalsIgnoreCase(method)) {
                 todo.deleted = true;
+                todos.put(todo.id, todo);
                 exchange.sendResponseHeaders(204, -1);
             } 
             // POST -> create a new todo if data is correct
             else if ("POST".equalsIgnoreCase(method)) {
                 try {
                     Todo t = gson.fromJson(readBody(exchange), Todo.class);
-                    t.id = counter++;
+                    t.id = UUID.randomUUID().toString();
                     t.deleted = false;
-                    todos.add(t);
+                    todos.put(t.id, t);
                     sendJson(exchange, 201, gson.toJson(t)); // 201 Created
                 } catch (Exception e) {
                     exchange.sendResponseHeaders(400, -1); // Bad Request
@@ -122,7 +114,8 @@ public class TodoServer {
             }
         });
 
-        server.setExecutor(null);  // single-threaded
+        server.setExecutor(Executors.newFixedThreadPool(10)); // Create a thread pool with 10 threads
+        // This allows the server to handle multiple requests concurrently
         server.start();
         System.out.println("Listening on http://localhost:8080");
     }
@@ -133,7 +126,6 @@ public class TodoServer {
     static String readBody(HttpExchange ex) throws IOException {
         return new String(ex.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
     }
-
 
     // Sends a JSON response with the given status code and JSON body
     // It sets the response headers to indicate that the content type is JSON
